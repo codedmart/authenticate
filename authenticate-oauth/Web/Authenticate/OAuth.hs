@@ -1,5 +1,9 @@
-{-# LANGUAGE CPP, DeriveDataTypeable, FlexibleContexts, MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings, StandaloneDeriving                            #-}
+{-# LANGUAGE CPP                   #-}
+{-# LANGUAGE DeriveDataTypeable    #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE StandaloneDeriving    #-}
 module Web.Authenticate.OAuth
     ( -- * Data types
       OAuth, def, newOAuth, oauthServerName, oauthRequestUri, oauthAccessTokenUri,
@@ -14,10 +18,11 @@ module Web.Authenticate.OAuth
       accessTokenOAuth,
       accessTokenTemporaryCredential,
       accessTokenManager,
+      addAuthHeader,
       -- * Operations for credentials
       newCredential, emptyCredential, insert, delete, inserts, injectVerifier,
       -- * Signature
-      signOAuth, genSign, checkOAuth,
+      signOAuth, signOAuth', genSign, checkOAuth,
       -- * Url & operation for authentication
       -- ** Temporary credentials
       getTemporaryCredential, getTemporaryCredentialWithScope,
@@ -37,35 +42,35 @@ module Web.Authenticate.OAuth
       paramEncode, addScope, addMaybeProxy
     ) where
 
-import           Blaze.ByteString.Builder     (toByteString)
+import           Blaze.ByteString.Builder   (toByteString)
+import           Control.Arrow              (second)
 import           Control.Exception
-import           Control.Arrow                (second)
 import           Control.Monad
-import           Control.Monad.IO.Class       (MonadIO, liftIO)
+import           Control.Monad.IO.Class     (MonadIO, liftIO)
 import           Control.Monad.Trans.Except
-import           Crypto.Types.PubKey.RSA      (PrivateKey (..)) -- , PublicKey (..)
+import           Crypto.Types.PubKey.RSA    (PrivateKey (..))
 import           Data.ByteString.Base64
-import qualified Data.ByteString.Char8        as BS
-import qualified Data.ByteString.Lazy.Char8   as BSL
+import qualified Data.ByteString.Char8      as BS
+import qualified Data.ByteString.Lazy.Char8 as BSL
 import           Data.Char
 import           Data.Default
 import           Data.Digest.Pure.SHA
-import qualified Data.IORef                   as I
-import           Data.List                    as List (sort, find)
+import qualified Data.IORef                 as I
+import           Data.List                  as List (find, sort)
 import           Data.Maybe
 import           Data.Time
 import           Network.HTTP.Client
-import           Network.HTTP.Types           (SimpleQuery, parseSimpleQuery)
-import           Network.HTTP.Types           (Header)
-import           Network.HTTP.Types           (renderSimpleQuery, status200)
+import           Network.HTTP.Types         (SimpleQuery, parseSimpleQuery)
+import           Network.HTTP.Types         (Header)
+import           Network.HTTP.Types         (renderSimpleQuery, status200)
 import           Numeric
 import           System.Random
 #if MIN_VERSION_base(4,7,0)
-import Data.Data hiding (Proxy (..))
+import           Data.Data                  hiding (Proxy (..))
 #else
-import Data.Data
+import           Data.Data
 #endif
-import Codec.Crypto.RSA (rsassa_pkcs1_v1_5_sign, hashSHA1)
+import           Codec.Crypto.RSA           (hashSHA1, rsassa_pkcs1_v1_5_sign)
 
 
 ----------------------------------------------------------------------
@@ -327,7 +332,7 @@ checkOAuth oa crd req = if isBodyFormEncoded origHeaders then checkOAuthB oa crd
                . splitEq . BS.dropWhile (' ' ==)
     splitEq s = case BS.elemIndex '=' s of
                   Nothing -> (s,"")
-                  Just i -> BS.splitAt i s
+                  Just i  -> BS.splitAt i s
     moauth_body_hash_orig = join $ (fmap snd . List.find ( ("oauth_body_hash" ==) . fst)) `liftM` authParams
     moauth_body_hash = if moauth_body_hash_orig == Nothing
           then return Nothing
@@ -511,8 +516,8 @@ baseTime = UTCTime day 0
     day = ModifiedJulianDay 40587
 
 showSigMtd :: SignMethod -> BS.ByteString
-showSigMtd PLAINTEXT = "PLAINTEXT"
-showSigMtd HMACSHA1  = "HMAC-SHA1"
+showSigMtd PLAINTEXT   = "PLAINTEXT"
+showSigMtd HMACSHA1    = "HMAC-SHA1"
 showSigMtd (RSASHA1 _) = "RSA-SHA1"
 
 addNonce :: MonadIO m => Credential -> m Credential
@@ -637,13 +642,13 @@ loadBodyBS :: MonadIO m => Request -> m BS.ByteString
 loadBodyBS = toBS . requestBody
 
 toBS :: MonadIO m => RequestBody -> m BS.ByteString
-toBS (RequestBodyLBS l) = return $ toStrict l
-toBS (RequestBodyBS s) = return s
-toBS (RequestBodyBuilder _ b) = return $ toByteString b
-toBS (RequestBodyStream _ givesPopper) = toBS' givesPopper
+toBS (RequestBodyLBS l)                     = return $ toStrict l
+toBS (RequestBodyBS s)                      = return s
+toBS (RequestBodyBuilder _ b)               = return $ toByteString b
+toBS (RequestBodyStream _ givesPopper)      = toBS' givesPopper
 toBS (RequestBodyStreamChunked givesPopper) = toBS' givesPopper
 #if MIN_VERSION_http_client(0, 4, 28)
-toBS (RequestBodyIO op) = liftIO op >>= toBS
+toBS (RequestBodyIO op)                     = liftIO op >>= toBS
 #else
 #endif
 
